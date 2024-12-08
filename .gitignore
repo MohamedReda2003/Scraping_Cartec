@@ -1,0 +1,9 @@
+cartec_venv/
+cartec_venv/*
+*.xlsx
+
+*.rar
+
+*.log
+
+*.json
