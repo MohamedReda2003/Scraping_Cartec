@@ -63,12 +63,16 @@ def run(playwright: Playwright) -> None:
                     selector= Selector(page_source)
                     #vehicle_count=len(page.query_selector_all("#vehicle-select > option"))
                     motorisation_names = selector.css("#vehicle-select  option ::text").getall()[1:]
+                    motorisations_options = [moto.attrib['value'] for moto in selector.css("#vehicle-select  option")]
                     for i in range(1,len(motorisation_names)):
                         total_modeles_names.append(modeles_true_names[modeles.index(modele)-1])
                         total_marques_names.append(marques_true_names[marques.index(marque)-1])
                         motorisations=str(motorisation_names[i]).replace("\n","").replace("            ","").replace("    ","")
                         print(motorisations)
                         motorisation_true_names.append(motorisations)
+                        page.locator("#vehicle-select").select_option(str(motorisations_options[i]))
+                        page.locator("#content  section  div.vehicle-selector.vs_f  div.vehicle-selector__button  a").click()
+                        f = input()
                     print(f"motorisation length:\t {len(motorisation_true_names)}")
                     #motorisation_true_names=[]
                     #for motorisation in motorisation_names[1:]
@@ -77,14 +81,7 @@ def run(playwright: Playwright) -> None:
                     
         print("total_marques length:\t",len(total_marques_names))
         print("total_modeles length:\t",len(total_modeles_names))
-        print("total_motorisation length:\t",len(motorisation_true_names))
-        df = pd.DataFrame({
-                        'MARQUE':total_marques_names,
-                        'MODELE':total_modeles_names,
-                        'MOTORISATION': motorisation_true_names
-                        })
-        print(df)
-        df.to_excel("file.xlsx",index=False)
+        p
     except Exception as e :
         print(e)
         pass
@@ -92,11 +89,7 @@ def run(playwright: Playwright) -> None:
         print("total_marques length:\t",len(total_marques_names))
         print("total_modeles length:\t",len(total_modeles_names))
         print("total_motorisation length:\t",len(motorisation_true_names))
-        df = pd.DataFrame({'MARQUE':total_marques_names,
-                        'MODELE':total_modeles_names,
-                        'MOTORISATION': motorisation_true_names})
-        print(df)
-        df.to_excel("file.xlsx",index=False)
+
    # page.locator("#manufacturer-select").select_option("3854")
    # page.locator("#model-select").select_option("36454")
     #page.locator("#vehicle-select").select_option("119512")
