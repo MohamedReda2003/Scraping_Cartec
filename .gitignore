@@ -7,3 +7,5 @@ cartec_venv/*
 *.log
 
 *.json
+
+output/

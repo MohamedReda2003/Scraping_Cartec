@@ -1,17 +1,36 @@
 import os
 import json
 import logging
-import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+import sys
+from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit, QProgressBar, QTextEdit, QFileDialog, QMessageBox
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
 import pandas as pd
 from playwright.sync_api import Playwright, sync_playwright
 from parsel import Selector
 
-class CartecScraperApp:
-    def __init__(self, master):
-        self.master = master
-        master.title("Cartec Web Scraper")
-        master.geometry("600x500")
+class ScraperThread(QThread):
+    progress_update = pyqtSignal(int, str)
+    log_update = pyqtSignal(str)
+    scraping_complete = pyqtSignal(str, int)
+    scraping_error = pyqtSignal(str)
+
+    def __init__(self, app, output_path):
+        super().__init__()
+        self.app = app
+        self.output_path = output_path
+
+    def run(self):
+        try:
+            with sync_playwright() as playwright:
+                self.app.run_scraper(playwright)
+        except Exception as e:
+            self.scraping_error.emit(str(e))
+
+class CartecScraperApp(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Cartec Web Scraper")
+        self.setGeometry(100, 100, 600, 500)
 
         # Setup logging
         logging.basicConfig(
@@ -29,74 +48,56 @@ class CartecScraperApp:
         self.create_ui()
 
     def create_ui(self):
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        layout = QVBoxLayout()
+
         # Output File Path
-        tk.Label(self.master, text="Output Excel File:").pack(pady=(10,0))
-        self.output_path = tk.StringVar(value=self.state.get('output_path', 'cartec_data.xlsx'))
-        output_frame = tk.Frame(self.master)
-        output_frame.pack(fill='x', padx=20)
-        
-        tk.Entry(output_frame, textvariable=self.output_path, width=50).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0,10))
-        tk.Button(output_frame, text="Browse", command=self.choose_output_file).pack(side=tk.RIGHT)
+        file_layout = QHBoxLayout()
+        self.output_path = QLineEdit(self.state.get('output_path', 'cartec_data.xlsx'))
+        file_layout.addWidget(QLabel("Output Excel File:"))
+        file_layout.addWidget(self.output_path)
+        browse_button = QPushButton("Browse")
+        browse_button.clicked.connect(self.choose_output_file)
+        file_layout.addWidget(browse_button)
+        layout.addLayout(file_layout)
 
         # Progress Tracking
-        tk.Label(self.master, text="Scraping Progress:").pack(pady=(10,0))
-        self.progress_var = tk.StringVar(value="Not Started")
-        tk.Label(self.master, textvariable=self.progress_var).pack()
+        self.progress_label = QLabel("Scraping Progress: Not Started")
+        layout.addWidget(self.progress_label)
 
-        self.progress_bar = ttk.Progressbar(
-            self.master, 
-            orient='horizontal', 
-            length=500, 
-            mode='determinate'
-        )
-        self.progress_bar.pack(pady=10)
+        self.progress_bar = QProgressBar()
+        layout.addWidget(self.progress_bar)
 
         # Control Buttons
-        button_frame = tk.Frame(self.master)
-        button_frame.pack(pady=10)
-        
-        self.start_button = tk.Button(
-            button_frame, 
-            text="Start/Continue Scraping", 
-            command=self.start_scraping
-        )
-        self.start_button.pack(side=tk.LEFT, padx=10)
-        
-        tk.Button(
-            button_frame, 
-            text="Reset Progress", 
-            command=self.reset_progress
-        ).pack(side=tk.LEFT, padx=10)
+        button_layout = QHBoxLayout()
+        self.start_button = QPushButton("Start/Continue Scraping")
+        self.start_button.clicked.connect(self.start_scraping)
+        button_layout.addWidget(self.start_button)
+
+        reset_button = QPushButton("Reset Progress")
+        reset_button.clicked.connect(self.reset_progress)
+        button_layout.addWidget(reset_button)
+        layout.addLayout(button_layout)
 
         # Log Display
-        tk.Label(self.master, text="Recent Logs:").pack()
-        self.log_text = tk.Text(
-            self.master, 
-            height=10, 
-            width=70, 
-            state=tk.DISABLED
-        )
-        self.log_text.pack(pady=10)
+        layout.addWidget(QLabel("Recent Logs:"))
+        self.log_text = QTextEdit()
+        self.log_text.setReadOnly(True)
+        layout.addWidget(self.log_text)
+
+        central_widget.setLayout(layout)
 
     def choose_output_file(self):
-        """Allow user to choose output Excel file."""
-        filename = filedialog.asksaveasfilename(
-            defaultextension=".xlsx",
-            filetypes=[("Excel files", "*.xlsx")]
-        )
+        filename, _ = QFileDialog.getSaveFileName(self, "Save Excel File", "", "Excel files (*.xlsx)")
         if filename:
-            self.output_path.set(filename)
+            self.output_path.setText(filename)
 
     def log_message(self, message):
-        """Log message to both text widget and log file."""
         self.logger.info(message)
-        self.log_text.config(state=tk.NORMAL)
-        self.log_text.insert(tk.END, message + "\n")
-        self.log_text.config(state=tk.DISABLED)
-        self.log_text.see(tk.END)
+        self.log_text.append(message)
 
     def load_state(self):
-        """Load previous scraping state."""
         try:
             if os.path.exists(self.state_file):
                 with open(self.state_file, 'r') as f:
@@ -106,7 +107,6 @@ class CartecScraperApp:
         return {}
 
     def save_state(self, state):
-        """Save current scraping state."""
         try:
             with open(self.state_file, 'w') as f:
                 json.dump(state, f)
@@ -114,100 +114,71 @@ class CartecScraperApp:
             self.log_message(f"Error saving state: {e}")
 
     def reset_progress(self):
-        """Reset scraping progress."""
-        if messagebox.askyesno("Reset Progress", "Are you sure you want to reset all progress?"):
-            # Remove state file
+        reply = QMessageBox.question(self, "Reset Progress", "Are you sure you want to reset all progress?",
+                                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply == QMessageBox.Yes:
             if os.path.exists(self.state_file):
                 os.remove(self.state_file)
-            
-            # Reset UI elements
-            self.progress_var.set("Not Started")
-            self.progress_bar['value'] = 0
-            
-            # Clear log text
-            self.log_text.config(state=tk.NORMAL)
-            self.log_text.delete(1.0, tk.END)
-            self.log_text.config(state=tk.DISABLED)
-
-            # Reset state
+            self.progress_label.setText("Scraping Progress: Not Started")
+            self.progress_bar.setValue(0)
+            self.log_text.clear()
             self.state = {}
 
     def start_scraping(self):
-        """Start or continue scraping process."""
-        # Disable start button during scraping
-        self.start_button.config(state=tk.DISABLED)
-        
-        try:
-            # Run scraping in playwright context
-            with sync_playwright() as playwright:
-                self.run_scraper(playwright)
-        except Exception as e:
-            messagebox.showerror("Scraping Error", str(e))
-            self.log_message(f"Scraping Error: {e}")
-        finally:
-            # Re-enable start button
-            self.start_button.config(state=tk.NORMAL)
+        self.start_button.setEnabled(False)
+        self.scraper_thread = ScraperThread(self, self.output_path.text())
+        self.scraper_thread.progress_update.connect(self.update_progress)
+        self.scraper_thread.log_update.connect(self.log_message)
+        self.scraper_thread.scraping_complete.connect(self.scraping_complete)
+        self.scraper_thread.scraping_error.connect(self.scraping_error)
+        self.scraper_thread.start()
+
+    def update_progress(self, value, message):
+        self.progress_bar.setValue(value)
+        self.progress_label.setText(f"Scraping Progress: {message}")
+
+    def scraping_complete(self, output_path, duplicates_removed):
+        QMessageBox.information(self, "Scraping Complete", 
+                                f"Data saved to {output_path}\n{duplicates_removed} duplicate rows removed.")
+        self.progress_label.setText("Scraping Complete")
+        self.progress_bar.setValue(100)
+        self.start_button.setEnabled(True)
+
+    def scraping_error(self, error_message):
+        QMessageBox.critical(self, "Scraping Error", error_message)
+        self.start_button.setEnabled(True)
 
     def remove_duplicate_rows(self, file_path):
-        """
-        Remove duplicate rows from the Excel file.
-        
-        Args:
-            file_path (str): Path to the Excel file to process
-        
-        Returns:
-            int: Number of duplicate rows removed
-        """
         try:
-            # Read the Excel file
             df = pd.read_excel(file_path)
-            
-            # Get the initial number of rows
             initial_rows = len(df)
-            
-            # Remove duplicate rows, keeping the first occurrence
             df_unique = df.drop_duplicates(subset=['MARQUE', 'MODELE', 'MOTORISATION'], keep='first')
-            
-            # Calculate number of duplicates removed
             duplicates_removed = initial_rows - len(df_unique)
-            
-            # Save the unique rows back to the Excel file
             df_unique.to_excel(file_path, index=False)
-            
-            # Log the duplicate removal
             if duplicates_removed > 0:
                 self.log_message(f"Removed {duplicates_removed} duplicate rows from {file_path}")
-            
             return duplicates_removed
-        
         except Exception as e:
             self.log_message(f"Error removing duplicates: {e}")
             return 0
 
     def run_scraper(self, playwright: Playwright) -> None:
-        """Main scraping logic with state management."""
-        # Prepare output file
-        output_path = self.output_path.get()
+        output_path = self.output_path.text()
         
-        # Load existing data if file exists
         if os.path.exists(output_path):
             existing_df = pd.read_excel(output_path)
             self.log_message(f"Loaded existing data: {len(existing_df)} rows")
         else:
             existing_df = pd.DataFrame(columns=['MARQUE', 'MODELE', 'MOTORISATION'])
 
-        # Initialize lists to collect data
         total_marques_names = existing_df['MARQUE'].tolist()
         total_modeles_names = existing_df['MODELE'].tolist()
         motorisation_true_names = existing_df['MOTORISATION'].tolist()
         
-        # Track processed combinations to avoid duplicates
         processed_combinations = set(zip(total_marques_names, total_modeles_names, motorisation_true_names))
 
-        # Determine the starting point
         last_marque = existing_df['MARQUE'].iloc[-1] if len(existing_df) > 0 else None
         
-        # Browser and context setup
         browser = playwright.chromium.launch(headless=False)
         context = browser.new_context()
         
@@ -219,19 +190,16 @@ class CartecScraperApp:
             page_source = page.locator("html").inner_html()
             selector = Selector(page_source)
             
-            # Get all marques (manufacturers)
             marques = [marqua.attrib['value'] for marqua in selector.css("#manufacturer-select > option")]
             marques_names = selector.css("#manufacturer-select > option ::text").getall()
             
-            # Clean marque names
             marques_true_names = []
             for marque in marques_names[1:]:
                 marques_true_names.append(
                     str(marque).replace("\n","").replace("            ","").replace("    ","")
                 )
 
-            # Find starting index
-            start_index = 1  # Default to start from the beginning
+            start_index = 1
             if last_marque:
                 try:
                     start_index = marques_true_names.index(last_marque) + 1
@@ -240,7 +208,6 @@ class CartecScraperApp:
                     self.log_message(f"Last marque {last_marque} not found. Starting from the beginning.")
                     start_index = 1
 
-            # Iterate through marques
             for marque_index, marque in enumerate(marques[start_index:], start_index):
                 self.log_message(f"Processing Marque: {marques_true_names[marque_index-1]}")
                 page.locator("#manufacturer-select").select_option(str(marque))
@@ -249,11 +216,9 @@ class CartecScraperApp:
                 page_source = page.locator("html").inner_html()
                 selector = Selector(page_source)
                 
-                # Get models for this marque
                 modeles = [modele.attrib['value'] for modele in selector.css("#model-select > option")]
                 modeles_names = selector.css("#model-select > option ::text").getall()[1:]
                 
-                # Iterate through models
                 for modele_index, modele in enumerate(modeles[1:], 1):
                     try:
                         modele_name = str(modeles_names[modele_index-1]).replace("\n","").replace("            ","").replace("    ","")
@@ -264,31 +229,24 @@ class CartecScraperApp:
                         page_source = page.locator("html").inner_html()
                         selector = Selector(page_source)
                         
-                        # Get motorisations
                         motorisation_names = selector.css("#vehicle-select  option ::text").getall()[1:]
                         
-                        # Track motorisation additions for this model
                         model_additions = 0
                         
-                        # Collect data for this model's motorisations
                         for motorisation_index, motorisation in enumerate(motorisation_names[1:], 1):
                             current_marque = marques_true_names[marque_index-1]
                             clean_motorisation = str(motorisation).replace("\n","").replace("            ","").replace("    ","")
                             
-                            # Check if this combination already exists
                             if (current_marque, modele_name, clean_motorisation) not in processed_combinations:
                                 total_marques_names.append(current_marque)
                                 total_modeles_names.append(modele_name)
                                 motorisation_true_names.append(clean_motorisation)
                                 
-                                # Add to processed combinations
                                 processed_combinations.add((current_marque, modele_name, clean_motorisation))
                                 model_additions += 1
                         
-                        # Log model-specific information
                         self.log_message(f"Model {modele_name}: Added {model_additions} new entries")
                         
-                        # Create temporary DataFrame to save progress incrementally
                         temp_df = pd.DataFrame({
                             'MARQUE': total_marques_names,
                             'MODELE': total_modeles_names,
@@ -296,22 +254,18 @@ class CartecScraperApp:
                         })
                         temp_df.to_excel(output_path, index=False)
                         
-                        # Update progress
-                        progress_percentage = (marque_index / len(marques[1:])) * 100
-                        self.progress_bar['value'] = progress_percentage
-                        self.progress_var.set(
+                        progress_percentage = int((marque_index / len(marques[1:])) * 100)
+                        self.scraper_thread.progress_update.emit(
+                            progress_percentage,
                             f"Processing {marques_true_names[marque_index-1]} - {modele_name}"
                         )
-                        self.master.update_idletasks()
 
                     except Exception as model_error:
                         self.log_message(f"Error processing model {modele_name}: {model_error}")
                         continue
 
-                # Log column lengths
                 self.log_message(f"Current data lengths - Marques: {len(total_marques_names)}, Modeles: {len(total_modeles_names)}, Motorisations: {len(motorisation_true_names)}")
 
-            # Final DataFrame and save
             df = pd.DataFrame({
                 'MARQUE': total_marques_names,
                 'MODELE': total_modeles_names,
@@ -320,24 +274,23 @@ class CartecScraperApp:
             
             df.to_excel(output_path, index=False)
             
-            # Remove duplicate rows after scraping
             duplicates_removed = self.remove_duplicate_rows(output_path)
             
-            messagebox.showinfo("Scraping Complete", f"Data saved to {output_path}\n{duplicates_removed} duplicate rows removed.")
-            self.progress_var.set("Scraping Complete")
-            self.progress_bar['value'] = 100
+            self.scraper_thread.scraping_complete.emit(output_path, duplicates_removed)
 
         except Exception as e:
             self.log_message(f"Scraping Error: {e}")
-            messagebox.showerror("Scraping Error", str(e))
+            self.scraper_thread.scraping_error.emit(str(e))
         finally:
             context.close()
             browser.close()
 
 def main():
-    root = tk.Tk()
-    app = CartecScraperApp(root)
-    root.mainloop()
+    app = QApplication(sys.argv)
+    window = CartecScraperApp()
+    window.show()
+    sys.exit(app.exec_())
 
 if __name__ == "__main__":
     main()
+
